@@ -20,7 +20,7 @@ val rdd = sc.newAPIHadoopRDD(sc.hadoopConfiguration, classOf[WebGraphInputFormat
 To transform this into an RDD of tuples in the form of `(ID, successor IDs)` run:
 
 ```scala
-val adjacencyList = rdd.map{case (k,v) => (k.get, v.values.toList)}
+val adjacencyList = rdd.map{case (k,v) => (k.get, v.values)}
 ```
 
 The following code counts the number of edges in the graph:
