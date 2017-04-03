@@ -9,54 +9,43 @@ import java.io.DataOutput;
 import java.io.IOException;
 
 public class NodeIteratorInputSplit extends InputSplit implements Writable {
-    private String basename;
-    private int splits;
-    private int index;
+    private int from;
+    private long length;
+    private String[] hosts;
 
-    public NodeIteratorInputSplit() {
+    public NodeIteratorInputSplit() { }
+
+    public NodeIteratorInputSplit(int from, long length, String[] hosts) {
+        this.from = from;
+        this.length = length;
+        this.hosts = hosts;
     }
 
-    public NodeIteratorInputSplit(String basename, int splits, int index) {
-        this.basename = basename;
-        this.splits = splits;
-        this.index = index;
-    }
-
-    public String getBasename() {
-        return basename;
-    }
-
-    public int getSplits() {
-        return splits;
-    }
-
-    public int getIndex() {
-        return index;
-    }
-
-    public String toString() {
-        return basename + " / " + splits + ": " + index;
+    public int getFrom() {
+        return from;
     }
 
     public void write(DataOutput out) throws IOException {
-        Text.writeString(out, basename);
-        out.writeInt(splits);
-        out.writeInt(index);
+        out.writeInt(from);
+        out.writeLong(length);
+        out.writeInt(hosts.length);
+        for (String host : hosts) Text.writeString(out, host);
     }
 
     public void readFields(DataInput in) throws IOException {
-        basename = Text.readString(in);
-        splits = in.readInt();
-        index = in.readInt();
+        from = in.readInt();
+        length = in.readLong();
+        hosts = new String[in.readInt()];
+        for (int i = 0; i < hosts.length; i++) hosts[i] = Text.readString(in);
     }
 
     @Override
     public long getLength() throws IOException, InterruptedException {
-        return 1;
+        return length;
     }
 
     @Override
     public String[] getLocations() throws IOException, InterruptedException {
-        return new String[0];
+        return hosts;
     }
 }
