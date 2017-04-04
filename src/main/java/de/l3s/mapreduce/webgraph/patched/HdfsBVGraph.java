@@ -2,8 +2,8 @@ package de.l3s.mapreduce.webgraph.patched;
 
 import de.l3s.mapreduce.webgraph.io.HdfsRepositionableStream;
 import it.unimi.dsi.Util;
+import it.unimi.dsi.bits.Fast;
 import it.unimi.dsi.fastutil.ints.IntArrays;
-import it.unimi.dsi.fastutil.io.FastMultiByteArrayInputStream;
 import it.unimi.dsi.fastutil.longs.AbstractLongIterator;
 import it.unimi.dsi.fastutil.longs.LongBigList;
 import it.unimi.dsi.io.InputBitStream;
@@ -18,10 +18,10 @@ import org.apache.hadoop.fs.Path;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.LinkedList;
 import java.util.NoSuchElementException;
 import java.util.Properties;
-
-import it.unimi.dsi.bits.Fast;
+import java.util.Queue;
 
 /**
  * Large parts of this code are copied from the original BVGraph class and patched to read data from HDFS.
@@ -33,33 +33,7 @@ public class HdfsBVGraph extends BVGraph {
 
     private int flags = 0;
     private InputBitStream outdegreeIbs;
-
-    public BVGraph copy() {
-        final HdfsBVGraph result = new HdfsBVGraph(this.fs);
-        result.basename = basename;
-        result.n = n;
-        result.m = m;
-        result.isMemory = isMemory;
-        result.isMapped = isMapped;
-        result.graphMemory = graphMemory;
-        result.graphStream = graphStream != null ? new FastMultiByteArrayInputStream( graphStream ) : null;
-        result.mappedGraphStream = mappedGraphStream != null ? mappedGraphStream.copy() : null;
-        result.offsets = offsets;
-        result.maxRefCount = maxRefCount;
-        result.windowSize = windowSize;
-        result.minIntervalLength = minIntervalLength;
-        result.offsetType = offsetType;
-        result.zetaK = zetaK;
-        result.outdegreeCoding = outdegreeCoding;
-        result.blockCoding = blockCoding;
-        result.residualCoding = residualCoding;
-        result.referenceCoding = referenceCoding;
-        result.blockCountCoding = blockCountCoding;
-        result.offsetCoding = offsetCoding;
-        result.flags = flags;
-        result.outdegreeIbs = new InputBitStream(graphStream(), 0 );
-        return result;
-    }
+    private Queue<InputBitStream> tempGraphBitStreams = new LinkedList<>();
 
     private FileSystem fs;
 
@@ -68,8 +42,19 @@ public class HdfsBVGraph extends BVGraph {
         this.fs = fs;
     }
 
-    public HdfsRepositionableStream graphStream() {
-        return openFile(basename + GRAPH_EXTENSION);
+    private InputBitStream createTempGraphBitStream() {
+        InputBitStream stream = new InputBitStream(openFile(basename + GRAPH_EXTENSION), 0);
+        tempGraphBitStreams.add(stream);
+        return stream;
+    }
+
+    private void closeTempGraphBitStreams() throws IOException {
+        for (InputBitStream stream : tempGraphBitStreams) stream.close();
+        tempGraphBitStreams.clear();
+    }
+
+    public void close() throws IOException {
+        if (outdegreeIbs != null) outdegreeIbs.close();
     }
 
     private HdfsRepositionableStream openFile(String filename) {
@@ -105,12 +90,12 @@ public class HdfsBVGraph extends BVGraph {
         return cachedOutdegree;
     }
 
+    @Override
     public LazyIntIterator successors( final int x ) {
-        if ( x < 0 || x >= n ) throw new IllegalArgumentException( "Node index out of range: " + x );
-        final InputBitStream ibs = new InputBitStream(openFile(basename + GRAPH_EXTENSION), 0 );
-        return successors( x, ibs, null, null );
+        throw new RuntimeException("this should never be called in the this implementation");
     }
 
+    @Override
     protected LazyIntIterator successors( final int x, final InputBitStream ibs, final int window[][], final int outd[] ) throws IllegalStateException {
         final int ref, refIndex;
         int i, extraCount, blockCount = 0;
@@ -201,7 +186,7 @@ public class HdfsBVGraph extends BVGraph {
                             ? LazyIntIterators.wrap( window[ refIndex ], outd[ refIndex ] )
                             :
                             // This is the recursive lazy part of the construction.
-                            successors( x - ref, new InputBitStream(graphStream(), 0 ), null, null )
+                            successors( x - ref, createTempGraphBitStream(), null, null )
             );
 
             if ( ref <= 0 ) return extraIterator;
@@ -226,11 +211,10 @@ public class HdfsBVGraph extends BVGraph {
         private int curr;
         private int upperBound;
 
-        private HdfsBVGraphNodeIterator(  final int from, final int upperBound, final long streamPosition, final int[][] window, final int[] outd ) throws IOException {
+        private HdfsBVGraphNodeIterator(  final int from, final int upperBound, final InputBitStream ibs, final int[][] window, final int[] outd ) throws IOException {
             if ( from < 0 || from > n ) throw new IllegalArgumentException( "Node index out of range: " + from );
             this.from = from;
-            ibs = createInputBitStream();
-            ibs.position( streamPosition );
+            this.ibs = ibs == null ? new InputBitStream(openFile(basename + GRAPH_EXTENSION), 0 ) : ibs;
             if ( window != null ) {
                 for ( int i = 0; i < window.length; i++ ) System.arraycopy( window[ i ], 0, this.window[ i ] = IntArrays.grow( this.window[ i ], outd[ i ], 0 ), 0, outd[ i ] );
                 System.arraycopy( outd, 0, this.outd, 0, outd.length );
@@ -239,7 +223,7 @@ public class HdfsBVGraph extends BVGraph {
                 for( int i = 1; i < Math.min( from + 1, cyclicBufferSize ); i++ ) {
                     pos = ( from - i + cyclicBufferSize ) % cyclicBufferSize;
                     this.outd[ pos ] = HdfsBVGraph.this.outdegreeInternal( from - i );
-                    System.arraycopy( HdfsBVGraph.this.successorArray( from - i ), 0, this.window[ pos ] = IntArrays.grow( this.window[ pos ], this.outd[ pos ], 0 ), 0, this.outd[ pos ] );
+                    System.arraycopy( successorArray( from - i ), 0, this.window[ pos ] = IntArrays.grow( this.window[ pos ], this.outd[ pos ], 0 ), 0, this.outd[ pos ] );
                 }
                 this.ibs.position( offsets.getLong( from ) ); // We must fix the bit stream position so that we are *before* the outdegree.
             }
@@ -248,7 +232,18 @@ public class HdfsBVGraph extends BVGraph {
         }
 
         private HdfsBVGraphNodeIterator(  final int from ) throws IOException {
-            this( from, Integer.MAX_VALUE, 0, null, null );
+            this( from, Integer.MAX_VALUE, null, null, null );
+        }
+
+        private int[] successorArray(int x) throws IOException {
+            int[] successor = new int[HdfsBVGraph.this.outdegree(x)];
+            LazyIntIterators.unwrap(HdfsBVGraph.this.successors( x, createTempGraphBitStream(), null, null ), successor);
+            closeTempGraphBitStreams();
+            return successor;
+        }
+
+        public void close() throws IOException {
+            ibs.close();
         }
 
         public int nextInt() {
@@ -288,22 +283,18 @@ public class HdfsBVGraph extends BVGraph {
         }
 
         @Override
-        public NodeIterator copy( final int upperBound ) {
+        public HdfsBVGraphNodeIterator copy( final int upperBound ) {
             try {
-                return new HdfsBVGraphNodeIterator( curr + 1, upperBound, ibs.position(), window, outd );
+                return new HdfsBVGraphNodeIterator( curr + 1, upperBound, ibs, window, outd );
             }
             catch ( IOException e ) {
                 throw new RuntimeException( e );
             }
         }
-
-        private InputBitStream createInputBitStream() throws FileNotFoundException {
-            return new InputBitStream(graphStream(), 0 );
-        }
     };
 
     @Override
-    public NodeIterator nodeIterator( final int from ) {
+    public HdfsBVGraphNodeIterator nodeIterator( final int from ) {
         try {
             return new HdfsBVGraphNodeIterator( from );
         } catch ( FileNotFoundException e ) {
@@ -395,7 +386,7 @@ public class HdfsBVGraph extends BVGraph {
 
         offsetIbs.close();
 
-        outdegreeIbs = new InputBitStream(graphStream(), 0);
+        outdegreeIbs = new InputBitStream(openFile(basename + GRAPH_EXTENSION), 0);
 
         return this;
     }

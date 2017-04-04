@@ -2,7 +2,6 @@ package de.l3s.mapreduce.webgraph.io;
 
 import de.l3s.mapreduce.webgraph.patched.HdfsBVGraph;
 import it.unimi.dsi.webgraph.BVGraph;
-import it.unimi.dsi.webgraph.NodeIterator;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FileStatus;
@@ -21,7 +20,7 @@ public class WebGraphInputFormat extends InputFormat<IntWritable, IntArrayWritab
 
     public static class WebGraphRecordReader extends RecordReader<IntWritable, IntArrayWritable> {
         private FileSystem fs = null;
-        private NodeIterator iterator = null;
+        private HdfsBVGraph.HdfsBVGraphNodeIterator iterator = null;
         private IntWritable key = new IntWritable();
         private IntArrayWritable values = new IntArrayWritable();
         private HdfsBVGraph graph = null;
@@ -52,6 +51,7 @@ public class WebGraphInputFormat extends InputFormat<IntWritable, IntArrayWritab
                 values.set(successors);
                 return true;
             } else {
+                iterator.close();
                 iterator = null;
                 return false;
             }
@@ -74,10 +74,8 @@ public class WebGraphInputFormat extends InputFormat<IntWritable, IntArrayWritab
 
         @Override
         public void close() throws IOException {
-            if (fs != null) {
-                fs.close();
-                fs = null;
-            }
+            iterator.close();
+            graph.close();
         }
     }
 
